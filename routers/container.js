@@ -45,4 +45,19 @@ router.post('/build', async function ({ body: message }, res) {
   }
 })
 
-module.exports.router = router
+module.exports = function (io) {
+  // Socket.IO
+  let socket = io.of('api/v1/containers/build')
+  socket.on('connection', function (clientSocket) {
+    // Whenever someone disconnects this piece of code executed
+    clientSocket.on('disconnect', function () {
+      console.log('A user disconnected')
+    })
+
+    // Send a message after a timeout of 4seconds
+    setTimeout(function () {
+      clientSocket.send('Sent a message 4seconds after connection!')
+    }, 4000)
+  })
+  return router
+}
