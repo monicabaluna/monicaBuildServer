@@ -23,7 +23,6 @@ app.use('/api/v1', apiv1)
 app.use(function (err, req, res, next) {
   next
   console.error(err, 'Error')
-  error.sendError(res, error.serverError(err))
 })
 
 server.listen(port, function (err) {

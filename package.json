@@ -19,6 +19,8 @@
   },
   "homepage": "https://github.com/monicabaluna/monicaBuildServer#readme",
   "dependencies": {
+    "amqp": "^0.2.6",
+    "amqp-stream": "^0.1.0",
     "body-parser": "^1.18.3",
     "express": "^4.16.3",
     "http": "0.0.0",
