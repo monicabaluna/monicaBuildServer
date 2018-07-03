@@ -6,31 +6,55 @@ const HttpStatus = require('http-status-codes')
 
 const router = express.Router()
 
+const tokenToSocket = {}
+
 router.post('/build', async function ({ body: message }, res) {
+  let { clientToken } = message
+
   try {
     let connection = amqp.createConnection()
     amqp_stream(
       {
-        connection: connection,
+        connection,
         exchange: 'rpc',
         routingKey: 'upper'
       },
       function (err, rpc_stream) {
+        if (err) {
+          console.log('first err: ', err)
+        }
         rpc_stream.createCorrelatedRequest(function (err, upper) {
-          if (err === 'undefined') {
-            console.error('RabbitMQ error')
-            connection.end.bind(connection)
+          if (err) {
+            console.log('Rabbit error:', err)
+            if (tokenToSocket[clientToken]) {
+              tokenToSocket[clientToken].disconnect()
+              delete tokenToSocket[clientToken]
+            }
+            return connection.end.bind(connection)
           }
+
           upper.on('data', function (buf) {
+            if (tokenToSocket[clientToken]) {
+              tokenToSocket[clientToken].send(buf.toString())
+            }
             console.log(buf.toString())
           })
+
           upper.on('end', function () {
             console.log('done')
             connection.end.bind(connection)
+            if (tokenToSocket[clientToken]) {
+              tokenToSocket[clientToken].disconnect()
+              delete tokenToSocket[clientToken]
+            }
           })
           upper.on('err', function () {
-            console.error('RabbitMQ error')
+            console.error(err)
             connection.end.bind(connection)
+            if (tokenToSocket[clientToken]) {
+              tokenToSocket[clientToken].disconnect()
+              delete tokenToSocket[clientToken]
+            }
           })
 
           console.log('sending')
@@ -46,18 +70,20 @@ router.post('/build', async function ({ body: message }, res) {
 })
 
 module.exports = function (io) {
-  // Socket.IO
-  let socket = io.of('api/v1/containers/build')
+  const socket = io.of('api/v1/containers/build')
+
   socket.on('connection', function (clientSocket) {
-    // Whenever someone disconnects this piece of code executed
+    let { clientToken } = clientSocket.handshake.query
+
+    tokenToSocket[clientToken] = clientSocket
+
     clientSocket.on('disconnect', function () {
-      console.log('A user disconnected')
+      console.log(`Client(${clientToken}) disconnected.`)
+      delete tokenToSocket[clientToken]
     })
 
-    // Send a message after a timeout of 4seconds
-    setTimeout(function () {
-      clientSocket.send('Sent a message 4seconds after connection!')
-    }, 4000)
+    clientSocket.send(`I know your token: ${clientToken}`)
   })
+
   return router
 }
