@@ -2,31 +2,27 @@
 const amqp = require('amqplib')
 const express = require('express')
 const HttpStatus = require('http-status-codes')
-const uuid = require('uuid/v1')
 
 const router = express.Router()
 
 const tokenToSocket = {}
 
 router.post('/build', async function ({ body: message }, res) {
-  let { clientToken } = message
+  let { _, clientUid } = message
 
   try {
     let connection = await amqp.connect('amqp://localhost')
     let channel = await connection.createChannel()
 
     let q = await channel.assertQueue('', { exclusive: true })
-    let corr = uuid()
-
-    console.log(corr)
 
     channel.consume(
       q.queue,
       function (msg) {
-        if (msg.properties.correlationId == corr) {
+        if (msg.properties.correlationId == clientUid) {
           console.log(' [.] Got %s', msg.content.toString())
-          if (tokenToSocket[clientToken]) {
-            tokenToSocket[clientToken].send(msg.content.toString())
+          if (tokenToSocket[clientUid]) {
+            tokenToSocket[clientUid].send(msg.content.toString())
           }
 
           if (msg.content.toString() === 'PUSH_OK') {
@@ -34,9 +30,9 @@ router.post('/build', async function ({ body: message }, res) {
             setTimeout(function () {
               connection.close()
             }, 500)
-            if (tokenToSocket[clientToken]) {
-              tokenToSocket[clientToken].disconnect()
-              delete tokenToSocket[clientToken]
+            if (tokenToSocket[clientUid]) {
+              tokenToSocket[clientUid].disconnect()
+              delete tokenToSocket[clientUid]
             }
           }
         }
@@ -48,7 +44,7 @@ router.post('/build', async function ({ body: message }, res) {
       'build_rpc_queue',
       new Buffer(JSON.stringify(message)),
       {
-        correlationId: corr,
+        correlationId: clientUid,
         replyTo: q.queue
       }
     )
@@ -64,13 +60,13 @@ module.exports = function (io) {
   const socket = io.of('api/v1/containers/build')
 
   socket.on('connection', function (clientSocket) {
-    let { clientToken } = clientSocket.handshake.query
+    let { _, clientUid } = clientSocket.handshake.query
 
-    tokenToSocket[clientToken] = clientSocket
+    tokenToSocket[clientUid] = clientSocket
 
     clientSocket.on('disconnect', function () {
       console.log(`Client disconnected.`)
-      delete tokenToSocket[clientToken]
+      delete tokenToSocket[clientUid]
     })
   })
 
