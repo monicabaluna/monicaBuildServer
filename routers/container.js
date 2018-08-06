@@ -1,8 +1,8 @@
 'use strict'
-const amqp = require('amqp')
-const amqp_stream = require('amqp-stream')
+const amqp = require('amqplib')
 const express = require('express')
 const HttpStatus = require('http-status-codes')
+const uuid = require('uuid/v1')
 
 const router = express.Router()
 
@@ -12,56 +12,47 @@ router.post('/build', async function ({ body: message }, res) {
   let { clientToken } = message
 
   try {
-    let connection = amqp.createConnection()
-    amqp_stream(
-      {
-        connection,
-        exchange: 'rpc',
-        routingKey: 'upper'
-      },
-      function (err, rpc_stream) {
-        if (err) {
-          console.log('first err: ', err)
-        }
-        rpc_stream.createCorrelatedRequest(function (err, upper) {
-          if (err) {
-            console.log('Rabbit error:', err)
-            if (tokenToSocket[clientToken]) {
-              tokenToSocket[clientToken].disconnect()
-              delete tokenToSocket[clientToken]
-            }
-            return connection.end.bind(connection)
+    let connection = await amqp.connect('amqp://localhost')
+    let channel = await connection.createChannel()
+
+    let q = await channel.assertQueue('', { exclusive: true })
+    let corr = uuid()
+
+    console.log(corr)
+
+    channel.consume(
+      q.queue,
+      function (msg) {
+        if (msg.properties.correlationId == corr) {
+          console.log(' [.] Got %s', msg.content.toString())
+          if (tokenToSocket[clientToken]) {
+            tokenToSocket[clientToken].send(msg.content.toString())
           }
 
-          upper.on('data', function (buf) {
-            if (tokenToSocket[clientToken]) {
-              tokenToSocket[clientToken].send(buf.toString())
-            }
-            console.log(buf.toString())
-          })
-
-          upper.on('end', function () {
+          if (msg.content.toString() === 'PUSH_OK') {
             console.log('done')
-            connection.end.bind(connection)
+            setTimeout(function () {
+              connection.close()
+            }, 500)
             if (tokenToSocket[clientToken]) {
               tokenToSocket[clientToken].disconnect()
               delete tokenToSocket[clientToken]
             }
-          })
-          upper.on('err', function () {
-            console.error(err)
-            connection.end.bind(connection)
-            if (tokenToSocket[clientToken]) {
-              tokenToSocket[clientToken].disconnect()
-              delete tokenToSocket[clientToken]
-            }
-          })
+          }
+        }
+      },
+      { noAck: true }
+    )
 
-          console.log('sending')
-          upper.write(JSON.stringify(message))
-        })
+    channel.sendToQueue(
+      'build_rpc_queue',
+      new Buffer(JSON.stringify(message)),
+      {
+        correlationId: corr,
+        replyTo: q.queue
       }
     )
+
     res.sendStatus(HttpStatus.OK)
   } catch (err) {
     console.error(err)
@@ -78,11 +69,9 @@ module.exports = function (io) {
     tokenToSocket[clientToken] = clientSocket
 
     clientSocket.on('disconnect', function () {
-      console.log(`Client(${clientToken}) disconnected.`)
+      console.log(`Client disconnected.`)
       delete tokenToSocket[clientToken]
     })
-
-    clientSocket.send(`I know your token: ${clientToken}`)
   })
 
   return router
