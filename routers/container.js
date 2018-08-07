@@ -5,7 +5,7 @@ const HttpStatus = require('http-status-codes')
 
 const router = express.Router()
 
-const tokenToSocket = {}
+const clientUidToSocket = {}
 
 router.post('/build', async function ({ body: message }, res) {
   let { _, clientUid } = message
@@ -16,29 +16,9 @@ router.post('/build', async function ({ body: message }, res) {
 
     let q = await channel.assertQueue('', { exclusive: true })
 
-    channel.consume(
-      q.queue,
-      function (msg) {
-        if (msg.properties.correlationId == clientUid) {
-          console.log(' [.] Got %s', msg.content.toString())
-          if (tokenToSocket[clientUid]) {
-            tokenToSocket[clientUid].send(msg.content.toString())
-          }
-
-          if (msg.content.toString() === 'PUSH_OK') {
-            console.log('done')
-            setTimeout(function () {
-              connection.close()
-            }, 500)
-            if (tokenToSocket[clientUid]) {
-              tokenToSocket[clientUid].disconnect()
-              delete tokenToSocket[clientUid]
-            }
-          }
-        }
-      },
-      { noAck: true }
-    )
+    channel.consume(q.queue, handleResponse(connection, clientUid), {
+      noAck: true
+    })
 
     channel.sendToQueue(
       'build_rpc_queue',
@@ -56,17 +36,42 @@ router.post('/build', async function ({ body: message }, res) {
   }
 })
 
+const handleResponse = (connection, clientUid) => async msg => {
+  if (msg.properties.correlationId != clientUid) {
+    return
+  }
+  console.log(' [.] Got %s', msg.content.toString())
+
+  if (clientUidToSocket[clientUid]) {
+    clientUidToSocket[clientUid].send(msg.content.toString())
+  }
+
+  if (
+    msg.content.toString() === 'PUSH_OK' ||
+    msg.content.toString().substring(0, 5) == 'ERROR'
+  ) {
+    console.log('done')
+
+    await connection.close()
+
+    if (clientUidToSocket[clientUid]) {
+      clientUidToSocket[clientUid].disconnect()
+      delete clientUidToSocket[clientUid]
+    }
+  }
+}
+
 module.exports = function (io) {
   const socket = io.of('api/v1/containers/build')
 
   socket.on('connection', function (clientSocket) {
     let { _, clientUid } = clientSocket.handshake.query
 
-    tokenToSocket[clientUid] = clientSocket
+    clientUidToSocket[clientUid] = clientSocket
 
     clientSocket.on('disconnect', function () {
       console.log(`Client disconnected.`)
-      delete tokenToSocket[clientUid]
+      delete clientUidToSocket[clientUid]
     })
   })
 
