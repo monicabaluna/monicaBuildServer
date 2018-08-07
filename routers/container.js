@@ -20,39 +20,47 @@ router.post('/build', async function ({ body: message }, res) {
 async function assignTaskToWorker (message) {
   let { _, clientUid } = message
 
+  // start a connection and a channel to rabbit queue
   let connection = await amqp.connect('amqp://localhost')
   let channel = await connection.createChannel()
 
+  // make sure needed queue exists (create it if it does not)
   let q = await channel.assertQueue('', { exclusive: true })
 
+  // set handler for RPC responses
   channel.consume(q.queue, handleResponse(connection, clientUid), {
     noAck: true
   })
 
+  // send build request
   channel.sendToQueue('build_rpc_queue', new Buffer(JSON.stringify(message)), {
     correlationId: clientUid,
     replyTo: q.queue
   })
 }
 
-const handleResponse = (connection, clientUid) => async msg => {
-  if (msg.properties.correlationId != clientUid) {
+const handleResponse = (connection, clientUid) => async response => {
+  if (response.properties.correlationId != clientUid) {
     return
   }
-  console.log(' [.] Got %s', msg.content.toString())
+  console.log(' [.] Got %s', response.content.toString())
 
+  // forward response to client via socket io
   if (clientUidToSocket[clientUid]) {
-    clientUidToSocket[clientUid].send(msg.content.toString())
+    clientUidToSocket[clientUid].send(response.content.toString())
   }
 
+  // verify if it's the final message
   if (
-    msg.content.toString() === 'PUSH_OK' ||
-    msg.content.toString().substring(0, 5) == 'ERROR'
+    response.content.toString() === 'PUSH_OK' ||
+    response.content.toString().substring(0, 5) == 'ERROR'
   ) {
     console.log('done')
 
+    // close rabbitmq connection
     await connection.close()
 
+    // close connection to client
     if (clientUidToSocket[clientUid]) {
       clientUidToSocket[clientUid].disconnect()
       delete clientUidToSocket[clientUid]
