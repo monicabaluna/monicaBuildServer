@@ -8,33 +8,32 @@ const router = express.Router()
 const clientUidToSocket = {}
 
 router.post('/build', async function ({ body: message }, res) {
-  let { _, clientUid } = message
-
   try {
-    let connection = await amqp.connect('amqp://localhost')
-    let channel = await connection.createChannel()
-
-    let q = await channel.assertQueue('', { exclusive: true })
-
-    channel.consume(q.queue, handleResponse(connection, clientUid), {
-      noAck: true
-    })
-
-    channel.sendToQueue(
-      'build_rpc_queue',
-      new Buffer(JSON.stringify(message)),
-      {
-        correlationId: clientUid,
-        replyTo: q.queue
-      }
-    )
-
-    res.sendStatus(HttpStatus.OK)
+    await assignTaskToWorker(message)
   } catch (err) {
     console.error(err)
-    res.sendStatus(HttpStatus.OK)
   }
+
+  res.sendStatus(HttpStatus.OK)
 })
+
+async function assignTaskToWorker (message) {
+  let { _, clientUid } = message
+
+  let connection = await amqp.connect('amqp://localhost')
+  let channel = await connection.createChannel()
+
+  let q = await channel.assertQueue('', { exclusive: true })
+
+  channel.consume(q.queue, handleResponse(connection, clientUid), {
+    noAck: true
+  })
+
+  channel.sendToQueue('build_rpc_queue', new Buffer(JSON.stringify(message)), {
+    correlationId: clientUid,
+    replyTo: q.queue
+  })
+}
 
 const handleResponse = (connection, clientUid) => async msg => {
   if (msg.properties.correlationId != clientUid) {
